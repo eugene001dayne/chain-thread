@@ -1,0 +1,100 @@
+const https = require("https");
+const http = require("http");
+
+class ChainThread {
+  constructor(baseUrl = "https://chain-thread.onrender.com") {
+    this.baseUrl = baseUrl.replace(/\/$/, "");
+  }
+
+  _request(method, path, body = null) {
+    return new Promise((resolve, reject) => {
+      const url = new URL(this.baseUrl + path);
+      const lib = url.protocol === "https:" ? https : http;
+      const options = {
+        hostname: url.hostname,
+        port: url.port || (url.protocol === "https:" ? 443 : 80),
+        path: url.pathname + url.search,
+        method,
+        headers: { "Content-Type": "application/json" },
+      };
+      const req = lib.request(options, (res) => {
+        let data = "";
+        res.on("data", (chunk) => (data += chunk));
+        res.on("end", () => {
+          try { resolve(JSON.parse(data)); }
+          catch (e) { resolve(data); }
+        });
+      });
+      req.on("error", reject);
+      if (body) req.write(JSON.stringify(body));
+      req.end();
+    });
+  }
+
+  // --- Chains ---
+  createChain(name, description = null, tags = {}) {
+    return this._request("POST", "/chains", { name, description, tags });
+  }
+
+  listChains() {
+    return this._request("GET", "/chains");
+  }
+
+  // --- Envelopes ---
+  sendEnvelope(chainId, senderId, senderRole, receiverId, receiverRole, payload, summary, provenance = [], contract = {}, onFail = "block") {
+    return this._request("POST", "/envelopes", {
+      chain_id: chainId,
+      sender_id: senderId,
+      sender_role: senderRole,
+      receiver_id: receiverId,
+      receiver_role: receiverRole,
+      payload,
+      summary,
+      provenance,
+      contract,
+      on_fail: onFail,
+    });
+  }
+
+  getEnvelope(envelopeId) {
+    return this._request("GET", `/envelopes/${envelopeId}`);
+  }
+
+  getChainEnvelopes(chainId) {
+    return this._request("GET", `/chains/${chainId}/envelopes`);
+  }
+
+  validateEnvelope(envelopeId) {
+    return this._request("POST", `/envelopes/${envelopeId}/validate`);
+  }
+
+  // --- Violations ---
+  getViolations() {
+    return this._request("GET", "/violations");
+  }
+
+  // --- Checkpoints ---
+  createCheckpoint(chainId, stateSnapshot, envelopeId = null, checkpointName = null) {
+    return this._request("POST", "/checkpoints", {
+      chain_id: chainId,
+      envelope_id: envelopeId,
+      state_snapshot: stateSnapshot,
+      checkpoint_name: checkpointName,
+    });
+  }
+
+  getCheckpoints(chainId) {
+    return this._request("GET", `/checkpoints/${chainId}`);
+  }
+
+  // --- Dashboard ---
+  stats() {
+    return this._request("GET", "/dashboard/stats");
+  }
+
+  health() {
+    return this._request("GET", "/health");
+  }
+}
+
+module.exports = { ChainThread };
