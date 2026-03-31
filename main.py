@@ -28,7 +28,7 @@ def db():
 app = FastAPI(
     title="ChainThread",
     description="Open agent handoff protocol and verification infrastructure.",
-    version="0.2.0"
+    version="0.3.0"
 )
 
 app.add_middleware(
@@ -130,7 +130,7 @@ def validate_contract(payload: Dict, contract: Contract):
 def root():
     return {
         "tool": "ChainThread",
-        "version": "0.2.0",
+        "version": "0.3.0",
         "status": "running",
         "description": "Open agent handoff protocol and verification infrastructure."
     }
@@ -502,3 +502,221 @@ def get_chain_lineage(chain_id: str):
     if r.status_code != 200:
         raise HTTPException(status_code=500, detail=r.text)
     return r.json()
+
+    # --- Analytics ---
+
+@app.get("/analytics/chains")
+def analytics_chains():
+    with db() as client:
+        envelopes = client.get("/envelopes").json()
+        chains = client.get("/chains").json()
+
+    chain_map = {c["chain_id"]: c["name"] for c in chains}
+    stats = {}
+
+    for e in envelopes:
+        cid = e["chain_id"]
+        if cid not in stats:
+            stats[cid] = {
+                "chain_id": cid,
+                "chain_name": chain_map.get(cid, "unknown"),
+                "total": 0,
+                "passed": 0,
+                "blocked": 0,
+                "violations": 0
+            }
+        stats[cid]["total"] += 1
+        if e.get("contract_passed"):
+            stats[cid]["passed"] += 1
+        else:
+            stats[cid]["blocked"] += 1
+            stats[cid]["violations"] += len(e.get("violations") or [])
+
+    result = list(stats.values())
+    for r in result:
+        r["pass_rate"] = round(100 * r["passed"] / r["total"], 2) if r["total"] > 0 else 0
+
+    return sorted(result, key=lambda x: x["pass_rate"])
+
+
+@app.get("/analytics/agents")
+def analytics_agents():
+    with db() as client:
+        envelopes = client.get("/envelopes").json()
+
+    stats = {}
+    for e in envelopes:
+        pair = f"{e['sender_role']} → {e['receiver_role']}"
+        if pair not in stats:
+            stats[pair] = {
+                "pair": pair,
+                "sender_role": e["sender_role"],
+                "receiver_role": e["receiver_role"],
+                "total": 0,
+                "passed": 0,
+                "blocked": 0
+            }
+        stats[pair]["total"] += 1
+        if e.get("contract_passed"):
+            stats[pair]["passed"] += 1
+        else:
+            stats[pair]["blocked"] += 1
+
+    result = list(stats.values())
+    for r in result:
+        r["pass_rate"] = round(100 * r["passed"] / r["total"], 2) if r["total"] > 0 else 0
+        r["failure_rate"] = round(100 * r["blocked"] / r["total"], 2) if r["total"] > 0 else 0
+
+    return sorted(result, key=lambda x: x["failure_rate"], reverse=True)
+
+
+@app.get("/analytics/confidence")
+def analytics_confidence():
+    with db() as client:
+        nodes = client.get("/lineage_nodes?order=timestamp.asc").json()
+
+    if not nodes:
+        return {"message": "No lineage data yet", "data": []}
+
+    by_chain = {}
+    for n in nodes:
+        cid = n.get("chain_id", "unknown")
+        if cid not in by_chain:
+            by_chain[cid] = []
+        if n.get("confidence") is not None:
+            by_chain[cid].append({
+                "hop": n["hop_count"],
+                "confidence": n["confidence"],
+                "agent_from": n["agent_from"],
+                "agent_to": n["agent_to"],
+                "contract_status": n["contract_status"]
+            })
+
+    result = []
+    for cid, hops in by_chain.items():
+        if hops:
+            avg_conf = round(sum(h["confidence"] for h in hops) / len(hops), 4)
+            result.append({
+                "chain_id": cid,
+                "avg_confidence": avg_conf,
+                "total_hops": len(hops),
+                "hops": hops
+            })
+
+    return result
+
+
+@app.get("/analytics/violations")
+def analytics_violations():
+    with db() as client:
+        violations = client.get("/contract_violations").json()
+
+    patterns = {}
+    for v in violations:
+        msg = v.get("message", "unknown")
+        if msg not in patterns:
+            patterns[msg] = {
+                "violation": msg,
+                "count": 0,
+                "severity": v.get("severity", "unknown"),
+                "chains_affected": set()
+            }
+        patterns[msg]["count"] += 1
+        patterns[msg]["chains_affected"].add(v.get("chain_id", "unknown"))
+
+    result = []
+    for p in patterns.values():
+        result.append({
+            "violation": p["violation"],
+            "count": p["count"],
+            "severity": p["severity"],
+            "chains_affected": len(p["chains_affected"])
+        })
+
+    return sorted(result, key=lambda x: x["count"], reverse=True)
+
+
+# --- Bidirectional Contracts ---
+
+class ResponseContract(BaseModel):
+    required_fields: Optional[List[str]] = []
+    assertions: Optional[List[ContractAssertion]] = []
+    on_fail: Optional[str] = "block"
+
+class EnvelopeResponse(BaseModel):
+    chain_id: str
+    responder_id: str
+    responder_role: str
+    response_payload: Dict[str, Any]
+    response_contract: Optional[ResponseContract] = ResponseContract()
+
+@app.post("/envelopes/{envelope_id}/respond")
+def respond_to_envelope(envelope_id: str, body: EnvelopeResponse):
+    # Validate response against response contract
+    contract = Contract(
+        required_fields=body.response_contract.required_fields,
+        assertions=body.response_contract.assertions,
+        on_fail=body.response_contract.on_fail
+    )
+    violations = validate_contract(body.response_payload, contract)
+    contract_passed = len(violations) == 0
+    on_fail = body.response_contract.on_fail or "block"
+
+    if not contract_passed and on_fail == "block":
+        return {
+            "status": "blocked",
+            "reason": "Response contract validation failed",
+            "violations": violations,
+            "envelope_id": envelope_id
+        }
+
+    now = datetime.now(timezone.utc).isoformat()
+    record = {
+        "id": str(uuid.uuid4()),
+        "envelope_id": envelope_id,
+        "chain_id": body.chain_id,
+        "responder_id": body.responder_id,
+        "responder_role": body.responder_role,
+        "response_payload": body.response_payload,
+        "response_contract": body.response_contract.dict(),
+        "contract_passed": contract_passed,
+        "violations": violations,
+        "status": "accepted" if contract_passed else on_fail,
+        "created_at": now
+    }
+
+    with db() as client:
+        r = client.post("/envelope_responses", json=record)
+        if r.status_code not in (200, 201):
+            raise HTTPException(status_code=500, detail=r.text)
+
+        if not contract_passed:
+            for v in violations:
+                violation_record = {
+                    "id": str(uuid.uuid4()),
+                    "envelope_id": envelope_id,
+                    "chain_id": body.chain_id,
+                    "violation_type": "response_contract_failure",
+                    "severity": "critical" if on_fail == "block" else "warning",
+                    "message": v,
+                    "on_fail": on_fail,
+                    "detected_at": now
+                }
+                client.post("/contract_violations", json=violation_record)
+
+    result = r.json()[0]
+    result["violations"] = violations
+    result["contract_passed"] = contract_passed
+    return result
+
+@app.get("/envelopes/{envelope_id}/responses")
+def get_envelope_responses(envelope_id: str):
+    with db() as client:
+        r = client.get(f"/envelope_responses?envelope_id=eq.{envelope_id}&order=created_at.asc")
+    if r.status_code != 200:
+        raise HTTPException(status_code=500, detail=r.text)
+    return {
+        "envelope_id": envelope_id,
+        "total_responses": len(r.json()),
+        "responses": r.json()
+    }
