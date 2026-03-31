@@ -95,6 +95,37 @@ class ChainThread {
   health() {
     return this._request("GET", "/health");
   }
+
+  // --- Dead Letter Queue ---
+  listDlq(status = null) {
+    const path = status ? `/dlq?status=${status}` : "/dlq";
+    return this._request("GET", path);
+  }
+
+  getDlqRecord(dlqId) {
+    return this._request("GET", `/dlq/${dlqId}`);
+  }
+
+  patchDlq(dlqId, fieldPatches) {
+    return this._request("POST", `/dlq/${dlqId}/patch`, { field_patches: fieldPatches });
+  }
+
+  reinjectDlq(dlqId) {
+    return this._request("POST", `/dlq/${dlqId}/reinject`, {});
+  }
+
+  dropDlq(dlqId, reason = "") {
+    return this._request("POST", `/dlq/${dlqId}/drop`, { reason });
+  }
+
+  // --- Lineage ---
+  getLineageTrace(traceId) {
+    return this._request("GET", `/lineage/trace/${traceId}`);
+  }
+
+  getChainLineage(chainId) {
+    return this._request("GET", `/lineage/chain/${chainId}`);
+  }
 }
 
 module.exports = { ChainThread };

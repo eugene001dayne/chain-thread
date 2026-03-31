@@ -103,3 +103,31 @@ class ChainThread:
 
     def health(self):
         return self._get("/health")
+    
+    # --- Dead Letter Queue ---
+
+    def list_dlq(self, status: str = None):
+        path = "/dlq"
+        if status:
+            path += f"?status={status}"
+        return self._get(path)
+
+    def get_dlq_record(self, dlq_id: str):
+        return self._get(f"/dlq/{dlq_id}")
+
+    def patch_dlq(self, dlq_id: str, field_patches: dict):
+        return self._post(f"/dlq/{dlq_id}/patch", {"field_patches": field_patches})
+
+    def reinject_dlq(self, dlq_id: str):
+        return self._post(f"/dlq/{dlq_id}/reinject", {})
+
+    def drop_dlq(self, dlq_id: str, reason: str = ""):
+        return self._post(f"/dlq/{dlq_id}/drop", {"reason": reason})
+
+    # --- Lineage ---
+
+    def get_lineage_trace(self, trace_id: str):
+        return self._get(f"/lineage/trace/{trace_id}")
+
+    def get_chain_lineage(self, chain_id: str):
+        return self._get(f"/lineage/chain/{chain_id}")
