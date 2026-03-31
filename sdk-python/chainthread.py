@@ -131,3 +131,39 @@ class ChainThread:
 
     def get_chain_lineage(self, chain_id: str):
         return self._get(f"/lineage/chain/{chain_id}")
+    
+    # --- Analytics ---
+
+    def analytics_chains(self):
+        return self._get("/analytics/chains")
+
+    def analytics_agents(self):
+        return self._get("/analytics/agents")
+
+    def analytics_confidence(self):
+        return self._get("/analytics/confidence")
+
+    def analytics_violations(self):
+        return self._get("/analytics/violations")
+
+    # --- Bidirectional Contracts ---
+
+    def respond_to_envelope(
+        self,
+        envelope_id: str,
+        chain_id: str,
+        responder_id: str,
+        responder_role: str,
+        response_payload: Dict[str, Any],
+        response_contract: Dict = {}
+    ):
+        return self._post(f"/envelopes/{envelope_id}/respond", {
+            "chain_id": chain_id,
+            "responder_id": responder_id,
+            "responder_role": responder_role,
+            "response_payload": response_payload,
+            "response_contract": response_contract
+        })
+
+    def get_envelope_responses(self, envelope_id: str):
+        return self._get(f"/envelopes/{envelope_id}/responses")

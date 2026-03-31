@@ -126,6 +126,38 @@ class ChainThread {
   getChainLineage(chainId) {
     return this._request("GET", `/lineage/chain/${chainId}`);
   }
+
+  // --- Analytics ---
+  analyticsChains() {
+    return this._request("GET", "/analytics/chains");
+  }
+
+  analyticsAgents() {
+    return this._request("GET", "/analytics/agents");
+  }
+
+  analyticsConfidence() {
+    return this._request("GET", "/analytics/confidence");
+  }
+
+  analyticsViolations() {
+    return this._request("GET", "/analytics/violations");
+  }
+
+  // --- Bidirectional Contracts ---
+  respondToEnvelope(envelopeId, chainId, responderId, responderRole, responsePayload, responseContract = {}) {
+    return this._request("POST", `/envelopes/${envelopeId}/respond`, {
+      chain_id: chainId,
+      responder_id: responderId,
+      responder_role: responderRole,
+      response_payload: responsePayload,
+      response_contract: responseContract
+    });
+  }
+
+  getEnvelopeResponses(envelopeId) {
+    return this._request("GET", `/envelopes/${envelopeId}/responses`);
+  }
 }
 
 module.exports = { ChainThread };

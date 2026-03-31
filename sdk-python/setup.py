@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="chainthread",
-    version="0.2.0",
+    version="0.3.0",
     description="Open agent handoff protocol and verification infrastructure.",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
