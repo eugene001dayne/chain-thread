@@ -96,7 +96,7 @@ Set per envelope or per contract rule.
 |------|-------|
 | Live API | https://chain-thread.onrender.com |
 | API Docs | https://chain-thread.onrender.com/docs |
-| Dashboard | _(add Lovable URL here)_ |
+| Dashboard | https://chain-thread.lovable.app |
 | PyPI | https://pypi.org/project/chainthread/ |
 | npm | https://www.npmjs.com/package/chainthread |
 
