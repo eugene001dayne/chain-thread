@@ -247,6 +247,33 @@ class ChainThread {
   diffRegistryContracts(name, versionA, versionB) {
     return this._request("GET", `/registry/${name}/diff/${versionA}/${versionB}`);
   }
+
+// --- PII ---
+  scanPii(payload, redact = false) {
+    return this._request("POST", "/pii/scan", { payload, redact });
+  }
+
+  redactPayload(payload) {
+    return this._request("POST", "/pii/redact", payload);
+  }
+
+  // --- Signing ---
+  signEnvelope(envelopeId, payload, senderId) {
+    return this._request("POST", "/sign", {
+      envelope_id: envelopeId,
+      payload,
+      sender_id: senderId
+    });
+  }
+
+  verifyEnvelope(envelopeId, payload, senderId, signature) {
+    return this._request("POST", "/verify", {
+      envelope_id: envelopeId,
+      payload,
+      sender_id: senderId,
+      signature
+    });
+  }
 }
 
 

@@ -258,3 +258,31 @@ class ChainThread:
 
     def diff_registry_contracts(self, name: str, version_a: str, version_b: str):
         return self._get(f"/registry/{name}/diff/{version_a}/{version_b}")
+
+# --- PII ---
+
+    def scan_pii(self, payload: Dict[str, Any], redact: bool = False):
+        return self._post("/pii/scan", {
+            "payload": payload,
+            "redact": redact
+        })
+
+    def redact_payload(self, payload: Dict[str, Any]):
+        return self._post("/pii/redact", payload)
+
+    # --- Signing ---
+
+    def sign_envelope(self, envelope_id: str, payload: Dict[str, Any], sender_id: str):
+        return self._post("/sign", {
+            "envelope_id": envelope_id,
+            "payload": payload,
+            "sender_id": sender_id
+        })
+
+    def verify_envelope(self, envelope_id: str, payload: Dict[str, Any], sender_id: str, signature: str):
+        return self._post("/verify", {
+            "envelope_id": envelope_id,
+            "payload": payload,
+            "sender_id": sender_id,
+            "signature": signature
+        })
