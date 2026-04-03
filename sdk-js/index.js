@@ -274,6 +274,21 @@ class ChainThread {
       signature
     });
   }
+
+// --- Thread Suite Bridge ---
+  triggerTestthread(envelopeId, chainId, senderId, testtreadSuiteId, testthreadBaseUrl = "https://test-thread-production.up.railway.app") {
+    return this._request("POST", "/bridge/testthread", {
+      envelope_id: envelopeId,
+      chain_id: chainId,
+      sender_id: senderId,
+      testthread_suite_id: testtreadSuiteId,
+      testthread_base_url: testthreadBaseUrl
+    });
+  }
+
+  bridgeStatus() {
+    return this._request("GET", "/bridge/status");
+  }
 }
 
 

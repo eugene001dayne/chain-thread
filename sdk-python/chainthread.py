@@ -286,3 +286,24 @@ class ChainThread:
             "sender_id": sender_id,
             "signature": signature
         })
+
+# --- Thread Suite Bridge ---
+
+    def trigger_testthread(
+        self,
+        envelope_id: str,
+        chain_id: str,
+        sender_id: str,
+        testthread_suite_id: str,
+        testthread_base_url: str = "https://test-thread-production.up.railway.app"
+    ):
+        return self._post("/bridge/testthread", {
+            "envelope_id": envelope_id,
+            "chain_id": chain_id,
+            "sender_id": sender_id,
+            "testthread_suite_id": testthread_suite_id,
+            "testthread_base_url": testthread_base_url
+        })
+
+    def bridge_status(self):
+        return self._get("/bridge/status")
