@@ -158,6 +158,64 @@ class ChainThread {
   getEnvelopeResponses(envelopeId) {
     return this._request("GET", `/envelopes/${envelopeId}/responses`);
   }
+// --- Webhooks ---
+  createWebhook(name, url, chainId = null, onBlock = true, onViolation = true, onLowConfidence = false, confidenceThreshold = 0.5) {
+    return this._request("POST", "/webhooks", {
+      name,
+      url,
+      chain_id: chainId,
+      on_block: onBlock,
+      on_violation: onViolation,
+      on_low_confidence: onLowConfidence,
+      confidence_threshold: confidenceThreshold
+    });
+  }
+
+  listWebhooks() {
+    return this._request("GET", "/webhooks");
+  }
+
+  deleteWebhook(webhookId) {
+    return new Promise((resolve, reject) => {
+      const url = new URL(this.baseUrl + `/webhooks/${webhookId}`);
+      const lib = url.protocol === "https:" ? require("https") : require("http");
+      const options = {
+        hostname: url.hostname,
+        port: url.port || (url.protocol === "https:" ? 443 : 80),
+        path: url.pathname,
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" }
+      };
+      const req = lib.request(options, (res) => {
+        let data = "";
+        res.on("data", (chunk) => (data += chunk));
+        res.on("end", () => {
+          try { resolve(JSON.parse(data)); }
+          catch (e) { resolve(data); }
+        });
+      });
+      req.on("error", reject);
+      req.end();
+    });
+  }
+
+  // --- HITL ---
+  listHitl(status = null) {
+    const path = status ? `/hitl?status=${status}` : "/hitl";
+    return this._request("GET", path);
+  }
+
+  getHitlCheckpoint(checkpointId) {
+    return this._request("GET", `/hitl/${checkpointId}`);
+  }
+
+  decideHitl(checkpointId, decision, reviewerNote = "") {
+    return this._request("POST", `/hitl/${checkpointId}/decide`, {
+      decision,
+      reviewer_note: reviewerNote
+    });
+  }
 }
+
 
 module.exports = { ChainThread };

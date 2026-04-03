@@ -167,3 +167,53 @@ class ChainThread:
 
     def get_envelope_responses(self, envelope_id: str):
         return self._get(f"/envelopes/{envelope_id}/responses")
+
+# --- Webhooks ---
+
+    def create_webhook(
+        self,
+        name: str,
+        url: str,
+        chain_id: str = None,
+        on_block: bool = True,
+        on_violation: bool = True,
+        on_low_confidence: bool = False,
+        confidence_threshold: float = 0.5,
+        active: bool = True
+    ):
+        return self._post("/webhooks", {
+            "name": name,
+            "url": url,
+            "chain_id": chain_id,
+            "on_block": on_block,
+            "on_violation": on_violation,
+            "on_low_confidence": on_low_confidence,
+            "confidence_threshold": confidence_threshold,
+            "active": active
+        })
+
+    def list_webhooks(self):
+        return self._get("/webhooks")
+
+    def delete_webhook(self, webhook_id: str):
+        with httpx.Client() as client:
+            r = client.delete(f"{self.base_url}/webhooks/{webhook_id}")
+            r.raise_for_status()
+            return r.json()
+
+    # --- HITL ---
+
+    def list_hitl(self, status: str = None):
+        path = "/hitl"
+        if status:
+            path += f"?status={status}"
+        return self._get(path)
+
+    def get_hitl_checkpoint(self, checkpoint_id: str):
+        return self._get(f"/hitl/{checkpoint_id}")
+
+    def decide_hitl(self, checkpoint_id: str, decision: str, reviewer_note: str = ""):
+        return self._post(f"/hitl/{checkpoint_id}/decide", {
+            "decision": decision,
+            "reviewer_note": reviewer_note
+        })
