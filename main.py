@@ -28,7 +28,7 @@ def db():
 app = FastAPI(
     title="ChainThread",
     description="Open agent handoff protocol and verification infrastructure.",
-    version="0.6.0"
+    version="0.7.0"
 )
 
 app.add_middleware(
@@ -163,13 +163,96 @@ def fire_webhooks(chain_id: str, event_type: str, payload: dict):
     except Exception:
         pass
 
+# --- PII Detection & Redaction ---
+
+import re
+import hashlib
+
+PII_PATTERNS = {
+    "email": r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+",
+    "phone": r"\b(\+?1?\s?)?(\(?\d{3}\)?[\s.-]?)(\d{3}[\s.-]?\d{4})\b",
+    "credit_card": r"\b(?:\d{4}[\s-]?){3}\d{4}\b",
+    "api_key": r"\b[A-Za-z0-9]{32,45}\b",
+    "ssn": r"\b\d{3}-\d{2}-\d{4}\b",
+    "ip_address": r"\b(?:\d{1,3}\.){3}\d{1,3}\b",
+}
+
+def detect_pii(value: str) -> list:
+    """Detect PII types in a string value."""
+    detected = []
+    for pii_type, pattern in PII_PATTERNS.items():
+        if re.search(pattern, str(value)):
+            detected.append(pii_type)
+    return detected
+
+def redact_pii(value: str) -> str:
+    """Replace PII patterns with redacted placeholders."""
+    result = str(value)
+    replacements = {
+        "email": "[REDACTED_EMAIL]",
+        "phone": "[REDACTED_PHONE]",
+        "credit_card": "[REDACTED_CARD]",
+        "ssn": "[REDACTED_SSN]",
+        "ip_address": "[REDACTED_IP]",
+    }
+    for pii_type, placeholder in replacements.items():
+        result = re.sub(PII_PATTERNS[pii_type], placeholder, result)
+    return result
+
+def scan_payload_for_pii(payload: dict) -> dict:
+    """Scan all string values in payload for PII."""
+    findings = {}
+    for key, value in payload.items():
+        if isinstance(value, str):
+            detected = detect_pii(value)
+            if detected:
+                findings[key] = detected
+        elif isinstance(value, dict):
+            nested = scan_payload_for_pii(value)
+            if nested:
+                findings[key] = nested
+    return findings
+
+def redact_payload(payload: dict) -> dict:
+    """Return a copy of payload with PII redacted."""
+    redacted = {}
+    for key, value in payload.items():
+        if isinstance(value, str):
+            redacted[key] = redact_pii(value)
+        elif isinstance(value, dict):
+            redacted[key] = redact_payload(value)
+        else:
+            redacted[key] = value
+    return redacted
+
+# --- Envelope Signing ---
+
+def sign_envelope(envelope_id: str, payload: dict, sender_id: str) -> str:
+    """Generate SHA-256 integrity hash for an envelope."""
+    canonical = json.dumps({
+        "envelope_id": envelope_id,
+        "sender_id": sender_id,
+        "payload": payload
+    }, sort_keys=True)
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+def verify_envelope_signature(
+    envelope_id: str,
+    payload: dict,
+    sender_id: str,
+    signature: str
+) -> bool:
+    """Verify envelope integrity hash matches."""
+    expected = sign_envelope(envelope_id, payload, sender_id)
+    return expected == signature
+
 # --- Routes ---
 
 @app.get("/")
 def root():
     return {
         "tool": "ChainThread",
-        "version": "0.6.0",
+        "version": "0.7.0",
         "status": "running",
         "description": "Open agent handoff protocol and verification infrastructure."
     }
@@ -219,6 +302,10 @@ def send_envelope(body: EnvelopeCreate):
     # Validate contract first
     violations = validate_contract(body.payload, body.contract)
     contract_passed = len(violations) == 0
+
+    # Auto PII scan
+    pii_findings = scan_payload_for_pii(body.payload)
+    pii_detected = len(pii_findings) > 0
     on_fail = body.contract.on_fail or body.on_fail or "block"
 
     if not contract_passed and on_fail == "block":
@@ -247,6 +334,9 @@ def send_envelope(body: EnvelopeCreate):
         "contract_passed": contract_passed,
         "violations": violations,
         "status": "delivered" if contract_passed else on_fail,
+        "pii_detected": pii_detected,
+        "pii_findings": pii_findings,
+        "signature": sign_envelope(envelope_id, body.payload, body.sender_id),
         "created_at": now
     }
 
@@ -1015,4 +1105,67 @@ def diff_registry_contracts(name: str, version_a: str, version_b: str):
         "on_fail_a": a.get("on_fail"),
         "on_fail_b": b.get("on_fail"),
         "summary": "BREAKING CHANGE detected" if breaking else "Non-breaking change"
+    }
+
+# --- PII Scanning ---
+
+class PIIScanRequest(BaseModel):
+    payload: Dict[str, Any]
+    redact: Optional[bool] = False
+
+@app.post("/pii/scan")
+def scan_for_pii(body: PIIScanRequest):
+    findings = scan_payload_for_pii(body.payload)
+    pii_detected = len(findings) > 0
+    result = {
+        "pii_detected": pii_detected,
+        "findings": findings,
+        "fields_affected": list(findings.keys())
+    }
+    if body.redact:
+        result["redacted_payload"] = redact_payload(body.payload)
+    return result
+
+@app.post("/pii/redact")
+def redact_payload_endpoint(payload: Dict[str, Any]):
+    return {
+        "original_fields": list(payload.keys()),
+        "redacted_payload": redact_payload(payload)
+    }
+
+# --- Envelope Signing ---
+
+class SignRequest(BaseModel):
+    envelope_id: str
+    payload: Dict[str, Any]
+    sender_id: str
+
+class VerifyRequest(BaseModel):
+    envelope_id: str
+    payload: Dict[str, Any]
+    sender_id: str
+    signature: str
+
+@app.post("/sign")
+def sign_envelope_endpoint(body: SignRequest):
+    signature = sign_envelope(body.envelope_id, body.payload, body.sender_id)
+    return {
+        "envelope_id": body.envelope_id,
+        "sender_id": body.sender_id,
+        "signature": signature,
+        "algorithm": "sha256"
+    }
+
+@app.post("/verify")
+def verify_envelope_endpoint(body: VerifyRequest):
+    valid = verify_envelope_signature(
+        body.envelope_id,
+        body.payload,
+        body.sender_id,
+        body.signature
+    )
+    return {
+        "envelope_id": body.envelope_id,
+        "valid": valid,
+        "message": "Signature valid — envelope untampered" if valid else "Signature invalid — envelope may have been tampered with"
     }
