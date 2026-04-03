@@ -217,3 +217,44 @@ class ChainThread:
             "decision": decision,
             "reviewer_note": reviewer_note
         })
+
+# --- Contract Registry ---
+
+    def create_registry_contract(
+        self,
+        name: str,
+        version: str,
+        required_fields: List[str] = [],
+        assertions: List[Dict] = [],
+        on_fail: str = "block",
+        description: str = None
+    ):
+        return self._post("/registry", {
+            "name": name,
+            "version": version,
+            "description": description,
+            "required_fields": required_fields,
+            "assertions": assertions,
+            "on_fail": on_fail
+        })
+
+    def list_registry_contracts(self):
+        return self._get("/registry")
+
+    def get_registry_contract_versions(self, name: str):
+        return self._get(f"/registry/{name}")
+
+    def get_registry_contract(self, name: str, version: str):
+        return self._get(f"/registry/{name}/{version}")
+
+    def deprecate_registry_contract(self, name: str, version: str):
+        with httpx.Client() as client:
+            r = client.delete(f"{self.base_url}/registry/{name}/{version}")
+            r.raise_for_status()
+            return r.json()
+
+    def validate_against_registry(self, name: str, version: str, payload: Dict[str, Any]):
+        return self._post(f"/registry/{name}/{version}/validate", payload)
+
+    def diff_registry_contracts(self, name: str, version_a: str, version_b: str):
+        return self._get(f"/registry/{name}/diff/{version_a}/{version_b}")

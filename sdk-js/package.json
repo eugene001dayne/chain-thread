@@ -1,6 +1,6 @@
 {
   "name": "chainthread",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Open agent handoff protocol and verification infrastructure.",
   "main": "index.js",
   "scripts": {

@@ -215,6 +215,38 @@ class ChainThread {
       reviewer_note: reviewerNote
     });
   }
+
+  // --- Contract Registry ---
+  createRegistryContract(name, version, requiredFields = [], assertions = [], onFail = "block", description = null) {
+    return this._request("POST", "/registry", {
+      name,
+      version,
+      description,
+      required_fields: requiredFields,
+      assertions,
+      on_fail: onFail
+    });
+  }
+
+  listRegistryContracts() {
+    return this._request("GET", "/registry");
+  }
+
+  getRegistryContractVersions(name) {
+    return this._request("GET", `/registry/${name}`);
+  }
+
+  getRegistryContract(name, version) {
+    return this._request("GET", `/registry/${name}/${version}`);
+  }
+
+  validateAgainstRegistry(name, version, payload) {
+    return this._request("POST", `/registry/${name}/${version}/validate`, payload);
+  }
+
+  diffRegistryContracts(name, versionA, versionB) {
+    return this._request("GET", `/registry/${name}/diff/${versionA}/${versionB}`);
+  }
 }
 
 
