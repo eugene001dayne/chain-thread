@@ -28,7 +28,7 @@ def db():
 app = FastAPI(
     title="ChainThread",
     description="Open agent handoff protocol and verification infrastructure.",
-    version="0.3.0"
+    version="0.5.0"
 )
 
 app.add_middleware(
@@ -124,13 +124,52 @@ def validate_contract(payload: Dict, contract: Contract):
 
     return violations
 
+# --- Webhook Firing ---
+
+def fire_webhooks(chain_id: str, event_type: str, payload: dict):
+    """Fire all active webhooks for a chain matching the event type."""
+    try:
+        with db() as client:
+            r = client.get(f"/webhooks?active=eq.true")
+            if r.status_code != 200:
+                return
+            all_webhooks = r.json()
+
+        matching = [
+            w for w in all_webhooks
+            if (w.get("chain_id") is None or w.get("chain_id") == chain_id)
+        ]
+
+        for webhook in matching:
+            should_fire = False
+            if event_type == "block" and webhook.get("on_block"):
+                should_fire = True
+            elif event_type == "violation" and webhook.get("on_violation"):
+                should_fire = True
+            elif event_type == "low_confidence" and webhook.get("on_low_confidence"):
+                should_fire = True
+
+            if should_fire:
+                try:
+                    with httpx.Client(timeout=5) as client:
+                        client.post(webhook["url"], json={
+                            "event": event_type,
+                            "chain_id": chain_id,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "data": payload
+                        })
+                except Exception:
+                    pass  # Never let webhook failure crash the pipeline
+    except Exception:
+        pass
+
 # --- Routes ---
 
 @app.get("/")
 def root():
     return {
         "tool": "ChainThread",
-        "version": "0.3.0",
+        "version": "0.5.0",
         "status": "running",
         "description": "Open agent handoff protocol and verification infrastructure."
     }
@@ -230,6 +269,33 @@ def send_envelope(body: EnvelopeCreate):
                     "detected_at": now
                 }
                 client.post("/contract_violations", json=violation_record)
+
+            # Fire block/violation webhooks
+            fire_webhooks(body.chain_id, "block", {
+                "envelope_id": envelope_id,
+                "violations": violations,
+                "sender_role": body.sender_role,
+                "receiver_role": body.receiver_role
+            })
+
+        # HITL checkpoint — pause if on_fail is escalate
+        if not contract_passed and on_fail == "escalate":
+            hitl_record = {
+                "id": str(uuid.uuid4()),
+                "envelope_id": envelope_id,
+                "chain_id": body.chain_id,
+                "reason": f"Contract failed: {', '.join(violations)}",
+                "confidence": body.payload.get("confidence"),
+                "status": "pending",
+                "created_at": now
+            }
+            with db() as client2:
+                client2.post("/hitl_checkpoints", json=hitl_record)
+            fire_webhooks(body.chain_id, "violation", {
+                "envelope_id": envelope_id,
+                "hitl": True,
+                "reason": hitl_record["reason"]
+            })
 
     result = r.json()[0]
     result["violations"] = violations
@@ -719,4 +785,106 @@ def get_envelope_responses(envelope_id: str):
         "envelope_id": envelope_id,
         "total_responses": len(r.json()),
         "responses": r.json()
+    }
+
+# --- Webhooks ---
+
+class WebhookCreate(BaseModel):
+    name: str
+    url: str
+    chain_id: Optional[str] = None
+    on_block: Optional[bool] = True
+    on_violation: Optional[bool] = True
+    on_low_confidence: Optional[bool] = False
+    confidence_threshold: Optional[float] = 0.5
+    active: Optional[bool] = True
+
+@app.post("/webhooks")
+def create_webhook(body: WebhookCreate):
+    now = datetime.now(timezone.utc).isoformat()
+    record = {
+        "id": str(uuid.uuid4()),
+        "name": body.name,
+        "url": body.url,
+        "chain_id": body.chain_id,
+        "on_block": body.on_block,
+        "on_violation": body.on_violation,
+        "on_low_confidence": body.on_low_confidence,
+        "confidence_threshold": body.confidence_threshold,
+        "active": body.active,
+        "created_at": now
+    }
+    with db() as client:
+        r = client.post("/webhooks", json=record)
+    if r.status_code not in (200, 201):
+        raise HTTPException(status_code=500, detail=r.text)
+    return r.json()[0]
+
+@app.get("/webhooks")
+def list_webhooks():
+    with db() as client:
+        r = client.get("/webhooks?order=created_at.desc")
+    if r.status_code != 200:
+        raise HTTPException(status_code=500, detail=r.text)
+    return r.json()
+
+@app.delete("/webhooks/{webhook_id}")
+def delete_webhook(webhook_id: str):
+    with db() as client:
+        r = client.patch(
+            f"/webhooks?id=eq.{webhook_id}",
+            json={"active": False}
+        )
+    if r.status_code not in (200, 201, 204):
+        raise HTTPException(status_code=500, detail=r.text)
+    return {"webhook_id": webhook_id, "status": "deactivated"}
+
+# --- HITL Checkpoints ---
+
+class HITLDecision(BaseModel):
+    decision: str  # approve | reject
+    reviewer_note: Optional[str] = ""
+
+@app.get("/hitl")
+def list_hitl_checkpoints(status: str = None):
+    url = "/hitl_checkpoints?order=created_at.desc"
+    if status:
+        url += f"&status=eq.{status}"
+    with db() as client:
+        r = client.get(url)
+    if r.status_code != 200:
+        raise HTTPException(status_code=500, detail=r.text)
+    return r.json()
+
+@app.get("/hitl/{checkpoint_id}")
+def get_hitl_checkpoint(checkpoint_id: str):
+    with db() as client:
+        r = client.get(f"/hitl_checkpoints?id=eq.{checkpoint_id}")
+    if r.status_code != 200 or not r.json():
+        raise HTTPException(status_code=404, detail="HITL checkpoint not found")
+    return r.json()[0]
+
+@app.post("/hitl/{checkpoint_id}/decide")
+def decide_hitl_checkpoint(checkpoint_id: str, body: HITLDecision):
+    if body.decision not in ("approve", "reject"):
+        raise HTTPException(status_code=400, detail="Decision must be 'approve' or 'reject'")
+
+    now = datetime.now(timezone.utc).isoformat()
+    with db() as client:
+        r = client.patch(
+            f"/hitl_checkpoints?id=eq.{checkpoint_id}",
+            json={
+                "status": body.decision + "d",
+                "reviewer_note": body.reviewer_note,
+                "decided_at": now
+            }
+        )
+    if r.status_code not in (200, 201, 204):
+        raise HTTPException(status_code=500, detail=r.text)
+    return {
+        "checkpoint_id": checkpoint_id,
+        "decision": body.decision,
+        "status": body.decision + "d",
+        "reviewer_note": body.reviewer_note,
+        "decided_at": now
     }
