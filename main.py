@@ -28,7 +28,7 @@ def db():
 app = FastAPI(
     title="ChainThread",
     description="Open agent handoff protocol and verification infrastructure.",
-    version="0.5.0"
+    version="0.6.0"
 )
 
 app.add_middleware(
@@ -169,7 +169,7 @@ def fire_webhooks(chain_id: str, event_type: str, payload: dict):
 def root():
     return {
         "tool": "ChainThread",
-        "version": "0.5.0",
+        "version": "0.6.0",
         "status": "running",
         "description": "Open agent handoff protocol and verification infrastructure."
     }
@@ -887,4 +887,132 @@ def decide_hitl_checkpoint(checkpoint_id: str, body: HITLDecision):
         "status": body.decision + "d",
         "reviewer_note": body.reviewer_note,
         "decided_at": now
+    }
+
+    # --- Contract Registry ---
+
+class ContractRegistryCreate(BaseModel):
+    name: str
+    version: str
+    description: Optional[str] = None
+    required_fields: Optional[List[str]] = []
+    assertions: Optional[List[ContractAssertion]] = []
+    on_fail: Optional[str] = "block"
+
+@app.post("/registry")
+def create_registry_contract(body: ContractRegistryCreate):
+    now = datetime.now(timezone.utc).isoformat()
+    record = {
+        "id": str(uuid.uuid4()),
+        "name": body.name,
+        "version": body.version,
+        "description": body.description,
+        "required_fields": body.required_fields,
+        "assertions": [a.dict() for a in body.assertions],
+        "on_fail": body.on_fail,
+        "is_active": True,
+        "created_at": now
+    }
+    with db() as client:
+        r = client.post("/contract_registry", json=record)
+    if r.status_code not in (200, 201):
+        raise HTTPException(status_code=500, detail=r.text)
+    return r.json()[0]
+
+@app.get("/registry")
+def list_registry_contracts():
+    with db() as client:
+        r = client.get("/contract_registry?order=name.asc,version.asc")
+    if r.status_code != 200:
+        raise HTTPException(status_code=500, detail=r.text)
+    return r.json()
+
+@app.get("/registry/{name}")
+def get_registry_contract_versions(name: str):
+    with db() as client:
+        r = client.get(f"/contract_registry?name=eq.{name}&order=version.asc")
+    if r.status_code != 200:
+        raise HTTPException(status_code=500, detail=r.text)
+    versions = r.json()
+    if not versions:
+        raise HTTPException(status_code=404, detail=f"Contract '{name}' not found")
+    return {
+        "name": name,
+        "total_versions": len(versions),
+        "versions": versions
+    }
+
+@app.get("/registry/{name}/{version}")
+def get_registry_contract(name: str, version: str):
+    with db() as client:
+        r = client.get(f"/contract_registry?name=eq.{name}&version=eq.{version}")
+    if r.status_code != 200 or not r.json():
+        raise HTTPException(status_code=404, detail=f"Contract '{name}@{version}' not found")
+    return r.json()[0]
+
+@app.delete("/registry/{name}/{version}")
+def deprecate_registry_contract(name: str, version: str):
+    with db() as client:
+        r = client.patch(
+            f"/contract_registry?name=eq.{name}&version=eq.{version}",
+            json={"is_active": False}
+        )
+    if r.status_code not in (200, 201, 204):
+        raise HTTPException(status_code=500, detail=r.text)
+    return {"name": name, "version": version, "status": "deprecated"}
+
+@app.post("/registry/{name}/{version}/validate")
+def validate_against_registry(name: str, version: str, payload: Dict[str, Any]):
+    with db() as client:
+        r = client.get(f"/contract_registry?name=eq.{name}&version=eq.{version}")
+    if r.status_code != 200 or not r.json():
+        raise HTTPException(status_code=404, detail=f"Contract '{name}@{version}' not found")
+
+    registry_contract = r.json()[0]
+    contract = Contract(
+        required_fields=registry_contract.get("required_fields", []),
+        assertions=[ContractAssertion(**a) for a in registry_contract.get("assertions", [])],
+        on_fail=registry_contract.get("on_fail", "block")
+    )
+    violations = validate_contract(payload, contract)
+    return {
+        "contract": f"{name}@{version}",
+        "passed": len(violations) == 0,
+        "violations": violations
+    }
+
+@app.get("/registry/{name}/diff/{version_a}/{version_b}")
+def diff_registry_contracts(name: str, version_a: str, version_b: str):
+    with db() as client:
+        ra = client.get(f"/contract_registry?name=eq.{name}&version=eq.{version_a}")
+        rb = client.get(f"/contract_registry?name=eq.{name}&version=eq.{version_b}")
+
+    if not ra.json():
+        raise HTTPException(status_code=404, detail=f"Contract '{name}@{version_a}' not found")
+    if not rb.json():
+        raise HTTPException(status_code=404, detail=f"Contract '{name}@{version_b}' not found")
+
+    a = ra.json()[0]
+    b = rb.json()[0]
+
+    fields_a = set(a.get("required_fields", []))
+    fields_b = set(b.get("required_fields", []))
+
+    added_fields = list(fields_b - fields_a)
+    removed_fields = list(fields_a - fields_b)
+    unchanged_fields = list(fields_a & fields_b)
+
+    breaking = len(removed_fields) > 0
+
+    return {
+        "contract": name,
+        "version_a": version_a,
+        "version_b": version_b,
+        "breaking_change": breaking,
+        "added_fields": added_fields,
+        "removed_fields": removed_fields,
+        "unchanged_fields": unchanged_fields,
+        "on_fail_a": a.get("on_fail"),
+        "on_fail_b": b.get("on_fail"),
+        "summary": "BREAKING CHANGE detected" if breaking else "Non-breaking change"
     }
