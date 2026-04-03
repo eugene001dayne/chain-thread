@@ -28,7 +28,7 @@ def db():
 app = FastAPI(
     title="ChainThread",
     description="Open agent handoff protocol and verification infrastructure.",
-    version="0.7.0"
+    version="0.8.0"
 )
 
 app.add_middleware(
@@ -252,7 +252,7 @@ def verify_envelope_signature(
 def root():
     return {
         "tool": "ChainThread",
-        "version": "0.7.0",
+        "version": "0.8.0",
         "status": "running",
         "description": "Open agent handoff protocol and verification infrastructure."
     }
@@ -1168,4 +1168,52 @@ def verify_envelope_endpoint(body: VerifyRequest):
         "envelope_id": body.envelope_id,
         "valid": valid,
         "message": "Signature valid — envelope untampered" if valid else "Signature invalid — envelope may have been tampered with"
+    }
+
+# --- Thread Suite Bridge ---
+
+class TestThreadTrigger(BaseModel):
+    envelope_id: str
+    chain_id: str
+    sender_id: str
+    testthread_suite_id: str
+    testthread_base_url: Optional[str] = "https://test-thread-production.up.railway.app"
+
+@app.post("/bridge/testthread")
+def trigger_testthread_on_failure(body: TestThreadTrigger):
+    """
+    Thread Suite Bridge — when a ChainThread handoff fails,
+    trigger a TestThread suite against the sending agent.
+    """
+    try:
+        with httpx.Client(timeout=10) as client:
+            r = client.post(
+                f"{body.testthread_base_url}/trigger",
+                json={"suite_id": body.testthread_suite_id}
+            )
+            testthread_result = r.json()
+    except Exception as e:
+        testthread_result = {"error": str(e)}
+
+    return {
+        "envelope_id": body.envelope_id,
+        "chain_id": body.chain_id,
+        "sender_id": body.sender_id,
+        "testthread_suite_id": body.testthread_suite_id,
+        "testthread_triggered": True,
+        "testthread_result": testthread_result,
+        "message": "TestThread suite triggered against failing agent"
+    }
+
+@app.get("/bridge/status")
+def bridge_status():
+    return {
+        "thread_suite": {
+            "iron_thread": "https://iron-thread-production.up.railway.app",
+            "test_thread": "https://test-thread-production.up.railway.app",
+            "prompt_thread": "https://prompt-thread.onrender.com",
+            "chain_thread": "https://chain-thread.onrender.com"
+        },
+        "bridge": "active",
+        "version": "0.8.0"
     }
