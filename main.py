@@ -28,7 +28,7 @@ def db():
 app = FastAPI(
     title="ChainThread",
     description="Open agent handoff protocol and verification infrastructure.",
-    version="0.9.0"
+    version="0.10.0"
 )
 
 app.add_middleware(
@@ -83,8 +83,19 @@ class CheckpointCreate(BaseModel):
 
 # --- Contract Validation ---
 
-def validate_contract(payload: Dict, contract: Contract):
+def validate_contract(payload: Dict, contract: Contract, sender_reputation: float = None):
     violations = []
+
+    # Check minimum sender reputation if specified
+    if sender_reputation is not None:
+        for assertion in contract.assertions:
+            if assertion.type == "minimum_sender_reputation":
+                required = float(assertion.value)
+                if sender_reputation < required:
+                    violations.append(
+                        f"Sender reputation {sender_reputation:.4f} is below required threshold {required:.4f}."
+                    )
+                    return violations  # Block immediately, no further checks
 
     for field in contract.required_fields:
         if field not in payload:
@@ -247,13 +258,95 @@ def verify_envelope_signature(
     expected = sign_envelope(envelope_id, payload, sender_id)
     return expected == signature
 
+# --- Agent Reputation Engine ---
+
+def calculate_reputation_score(
+    total_handoffs: int,
+    passed_handoffs: int,
+    failed_handoffs: int,
+    contract_violation_count: int,
+    pii_incident_count: int
+) -> float:
+    if total_handoffs == 0:
+        return 1.0
+
+    base_score = passed_handoffs / total_handoffs
+
+    # Recency weighting — recent failures count more
+    # Each contract violation subtracts 0.02
+    violation_penalty = contract_violation_count * 0.02
+
+    # Each PII incident subtracts 0.05
+    pii_penalty = pii_incident_count * 0.05
+
+    score = base_score - violation_penalty - pii_penalty
+
+    # Floor at 0.0, ceiling at 1.0
+    return round(max(0.0, min(1.0, score)), 4)
+
+
+def update_agent_reputation(agent_id: str, passed: bool, has_violations: bool, has_pii: bool):
+    """Update or create reputation record for an agent after every handoff."""
+    try:
+        with db() as client:
+            # Check if agent exists
+            r = client.get(f"/agent_reputation?agent_id=eq.{agent_id}")
+            now = datetime.now(timezone.utc).isoformat()
+
+            if r.status_code == 200 and r.json():
+                existing = r.json()[0]
+                total = existing["total_handoffs"] + 1
+                passed_count = existing["passed_handoffs"] + (1 if passed else 0)
+                failed_count = existing["failed_handoffs"] + (0 if passed else 1)
+                violation_count = existing["contract_violation_count"] + (1 if has_violations else 0)
+                pii_count = existing["pii_incident_count"] + (1 if has_pii else 0)
+
+                score = calculate_reputation_score(
+                    total, passed_count, failed_count, violation_count, pii_count
+                )
+
+                client.patch(
+                    f"/agent_reputation?agent_id=eq.{agent_id}",
+                    json={
+                        "total_handoffs": total,
+                        "passed_handoffs": passed_count,
+                        "failed_handoffs": failed_count,
+                        "contract_violation_count": violation_count,
+                        "pii_incident_count": pii_count,
+                        "reputation_score": score,
+                        "last_updated": now
+                    }
+                )
+            else:
+                # Create new reputation record
+                score = calculate_reputation_score(
+                    1,
+                    1 if passed else 0,
+                    0 if passed else 1,
+                    1 if has_violations else 0,
+                    1 if has_pii else 0
+                )
+                client.post("/agent_reputation", json={
+                    "id": str(uuid.uuid4()),
+                    "agent_id": agent_id,
+                    "total_handoffs": 1,
+                    "passed_handoffs": 1 if passed else 0,
+                    "failed_handoffs": 0 if passed else 1,
+                    "contract_violation_count": 1 if has_violations else 0,
+                    "pii_incident_count": 1 if has_pii else 0,
+                    "reputation_score": score,
+                    "last_updated": now
+                })
+    except Exception:
+        pass  # Never let reputation update crash the pipeline
+
 # --- Routes ---
 
 @app.get("/")
 def root():
     return {
         "tool": "ChainThread",
-        "version": "0.9.0",
+        "version": "0.10.0",
         "status": "running",
         "description": "Open agent handoff protocol and verification infrastructure."
     }
@@ -301,7 +394,17 @@ def list_chains():
 @app.post("/envelopes")
 def send_envelope(body: EnvelopeCreate):
     # Validate contract first
-    violations = validate_contract(body.payload, body.contract)
+    # Get sender reputation for contract check
+    sender_reputation = None
+    try:
+        with db() as rep_client:
+            rep_r = rep_client.get(f"/agent_reputation?agent_id=eq.{body.sender_id}")
+            if rep_r.status_code == 200 and rep_r.json():
+                sender_reputation = rep_r.json()[0].get("reputation_score", 1.0)
+    except Exception:
+        sender_reputation = 1.0
+
+    violations = validate_contract(body.payload, body.contract, sender_reputation)
     contract_passed = len(violations) == 0
 
     # Auto PII scan
@@ -362,14 +465,21 @@ def send_envelope(body: EnvelopeCreate):
                 }
                 client.post("/contract_violations", json=violation_record)
 
-            # Fire block/violation webhooks
-            fire_webhooks(body.chain_id, "block", {
-                "envelope_id": envelope_id,
-                "violations": violations,
-                "sender_role": body.sender_role,
-                "receiver_role": body.receiver_role
-            })
+            # Update sender reputation after every handoff
+        update_agent_reputation(
+            agent_id=body.sender_id,
+            passed=contract_passed,
+            has_violations=not contract_passed,
+            has_pii=pii_detected
+        )
 
+        # Fire block/violation webhooks
+        fire_webhooks(body.chain_id, "block", {
+            "envelope_id": envelope_id,
+            "violations": violations,
+            "sender_role": body.sender_role,
+            "receiver_role": body.receiver_role
+        })
         # HITL checkpoint — pause if on_fail is escalate
         if not contract_passed and on_fail == "escalate":
             hitl_record = {
@@ -1241,4 +1351,42 @@ def get_policy_envelope(envelope_id: str):
         "sender_id": envelope.get("sender_id"),
         "sender_role": envelope.get("sender_role"),
         "policy_envelope": policy_envelope
+    }
+
+# --- Agent Reputation ---
+
+@app.get("/reputation")
+def list_reputation():
+    with db() as client:
+        r = client.get("/agent_reputation?order=reputation_score.desc")
+    if r.status_code != 200:
+        raise HTTPException(status_code=500, detail=r.text)
+    return {
+        "total_agents": len(r.json()),
+        "agents": r.json()
+    }
+
+@app.get("/reputation/{agent_id}")
+def get_agent_reputation(agent_id: str):
+    with db() as client:
+        r = client.get(f"/agent_reputation?agent_id=eq.{agent_id}")
+    if r.status_code != 200 or not r.json():
+        raise HTTPException(status_code=404, detail=f"No reputation record found for agent '{agent_id}'")
+    record = r.json()[0]
+    return {
+        "agent_id": agent_id,
+        "reputation_score": record["reputation_score"],
+        "total_handoffs": record["total_handoffs"],
+        "passed_handoffs": record["passed_handoffs"],
+        "failed_handoffs": record["failed_handoffs"],
+        "contract_violation_count": record["contract_violation_count"],
+        "pii_incident_count": record["pii_incident_count"],
+        "last_updated": record["last_updated"],
+        "grade": (
+            "A" if record["reputation_score"] >= 0.9 else
+            "B" if record["reputation_score"] >= 0.75 else
+            "C" if record["reputation_score"] >= 0.6 else
+            "D" if record["reputation_score"] >= 0.4 else
+            "F"
+        )
     }
