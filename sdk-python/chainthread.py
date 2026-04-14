@@ -314,3 +314,11 @@ class ChainThread:
 
     def get_policy_envelope(self, envelope_id: str):
         return self._get(f"/envelopes/{envelope_id}/policy-envelope")
+
+# --- Agent Reputation ---
+
+    def list_reputation(self):
+        return self._get("/reputation")
+
+    def get_agent_reputation(self, agent_id: str):
+        return self._get(f"/reputation/{agent_id}")

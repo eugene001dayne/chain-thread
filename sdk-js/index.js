@@ -295,6 +295,15 @@ class ChainThread {
   getPolicyEnvelope(envelopeId) {
     return this._request("GET", `/envelopes/${envelopeId}/policy-envelope`);
   }
+
+  // --- Agent Reputation ---
+  listReputation() {
+    return this._request("GET", "/reputation");
+  }
+
+  getAgentReputation(agentId) {
+    return this._request("GET", `/reputation/${agentId}`);
+  }
 }
 
 
