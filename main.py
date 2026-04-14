@@ -28,7 +28,7 @@ def db():
 app = FastAPI(
     title="ChainThread",
     description="Open agent handoff protocol and verification infrastructure.",
-    version="0.8.0"
+    version="0.9.0"
 )
 
 app.add_middleware(
@@ -73,6 +73,7 @@ class EnvelopeCreate(BaseModel):
     provenance: Optional[List[ProvenanceEntry]] = []
     contract: Optional[Contract] = Contract()
     on_fail: Optional[str] = "block"
+    policy_envelope: Optional[Dict[str, Any]] = None
 
 class CheckpointCreate(BaseModel):
     chain_id: str
@@ -252,7 +253,7 @@ def verify_envelope_signature(
 def root():
     return {
         "tool": "ChainThread",
-        "version": "0.8.0",
+        "version": "0.9.0",
         "status": "running",
         "description": "Open agent handoff protocol and verification infrastructure."
     }
@@ -337,6 +338,7 @@ def send_envelope(body: EnvelopeCreate):
         "pii_detected": pii_detected,
         "pii_findings": pii_findings,
         "signature": sign_envelope(envelope_id, body.payload, body.sender_id),
+        "policy_envelope": body.policy_envelope,
         "created_at": now
     }
 
@@ -1215,5 +1217,28 @@ def bridge_status():
             "chain_thread": "https://chain-thread.onrender.com"
         },
         "bridge": "active",
-        "version": "0.8.0"
+        "version": "0.9.0"
+    }
+
+# --- Policy Envelope ---
+
+@app.get("/envelopes/{envelope_id}/policy-envelope")
+def get_policy_envelope(envelope_id: str):
+    with db() as client:
+        r = client.get(f"/envelopes?id=eq.{envelope_id}")
+    if r.status_code != 200 or not r.json():
+        raise HTTPException(status_code=404, detail="Envelope not found")
+    envelope = r.json()[0]
+    policy_envelope = envelope.get("policy_envelope")
+    if not policy_envelope:
+        raise HTTPException(
+            status_code=404,
+            detail="No policy envelope included in this handoff"
+        )
+    return {
+        "envelope_id": envelope_id,
+        "chain_id": envelope.get("chain_id"),
+        "sender_id": envelope.get("sender_id"),
+        "sender_role": envelope.get("sender_role"),
+        "policy_envelope": policy_envelope
     }
