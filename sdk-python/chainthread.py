@@ -48,7 +48,8 @@ class ChainThread:
         summary: str,
         provenance: List[Dict] = [],
         contract: Dict = {},
-        on_fail: str = "block"
+        on_fail: str = "block",
+        policy_envelope: Dict[str, Any] = None
     ):
         return self._post("/envelopes", {
             "chain_id": chain_id,
@@ -60,7 +61,8 @@ class ChainThread:
             "summary": summary,
             "provenance": provenance,
             "contract": contract,
-            "on_fail": on_fail
+            "on_fail": on_fail,
+            "policy_envelope": policy_envelope
         })
 
     def get_envelope(self, envelope_id: str):
@@ -307,3 +309,8 @@ class ChainThread:
 
     def bridge_status(self):
         return self._get("/bridge/status")
+
+# --- Policy Envelope ---
+
+    def get_policy_envelope(self, envelope_id: str):
+        return self._get(f"/envelopes/{envelope_id}/policy-envelope")

@@ -41,7 +41,7 @@ class ChainThread {
   }
 
   // --- Envelopes ---
-  sendEnvelope(chainId, senderId, senderRole, receiverId, receiverRole, payload, summary, provenance = [], contract = {}, onFail = "block") {
+  sendEnvelope(chainId, senderId, senderRole, receiverId, receiverRole, payload, summary, provenance = [], contract = {}, onFail = "block", policyEnvelope = null) {
     return this._request("POST", "/envelopes", {
       chain_id: chainId,
       sender_id: senderId,
@@ -53,6 +53,7 @@ class ChainThread {
       provenance,
       contract,
       on_fail: onFail,
+      policy_envelope: policyEnvelope
     });
   }
 
@@ -288,6 +289,11 @@ class ChainThread {
 
   bridgeStatus() {
     return this._request("GET", "/bridge/status");
+  }
+
+  // --- Policy Envelope ---
+  getPolicyEnvelope(envelopeId) {
+    return this._request("GET", `/envelopes/${envelopeId}/policy-envelope`);
   }
 }
 
