@@ -465,39 +465,40 @@ def send_envelope(body: EnvelopeCreate):
                 }
                 client.post("/contract_violations", json=violation_record)
 
-            # Update sender reputation after every handoff
-        update_agent_reputation(
-            agent_id=body.sender_id,
-            passed=contract_passed,
-            has_violations=not contract_passed,
-            has_pii=pii_detected
-        )
+            # HITL checkpoint — pause if on_fail is escalate
+            if on_fail == "escalate":
+                hitl_record = {
+                    "id": str(uuid.uuid4()),
+                    "envelope_id": envelope_id,
+                    "chain_id": body.chain_id,
+                    "reason": f"Contract failed: {', '.join(violations)}",
+                    "confidence": body.payload.get("confidence"),
+                    "status": "pending",
+                    "created_at": now
+                }
+                with db() as client2:
+                    client2.post("/hitl_checkpoints", json=hitl_record)
+                fire_webhooks(body.chain_id, "violation", {
+                    "envelope_id": envelope_id,
+                    "hitl": True,
+                    "reason": hitl_record["reason"]
+                })
 
-        # Fire block/violation webhooks
-        fire_webhooks(body.chain_id, "block", {
-            "envelope_id": envelope_id,
-            "violations": violations,
-            "sender_role": body.sender_role,
-            "receiver_role": body.receiver_role
-        })
-        # HITL checkpoint — pause if on_fail is escalate
-        if not contract_passed and on_fail == "escalate":
-            hitl_record = {
-                "id": str(uuid.uuid4()),
+            # Fire block webhook only on failures
+            fire_webhooks(body.chain_id, "block", {
                 "envelope_id": envelope_id,
-                "chain_id": body.chain_id,
-                "reason": f"Contract failed: {', '.join(violations)}",
-                "confidence": body.payload.get("confidence"),
-                "status": "pending",
-                "created_at": now
-            }
-            with db() as client2:
-                client2.post("/hitl_checkpoints", json=hitl_record)
-            fire_webhooks(body.chain_id, "violation", {
-                "envelope_id": envelope_id,
-                "hitl": True,
-                "reason": hitl_record["reason"]
+                "violations": violations,
+                "sender_role": body.sender_role,
+                "receiver_role": body.receiver_role
             })
+
+    # Update sender reputation — outside the db block
+    update_agent_reputation(
+        agent_id=body.sender_id,
+        passed=contract_passed,
+        has_violations=not contract_passed,
+        has_pii=pii_detected
+    )
 
     result = r.json()[0]
     result["violations"] = violations
