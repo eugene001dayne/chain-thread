@@ -450,8 +450,6 @@ def send_envelope(body: EnvelopeCreate):
         print("SUPABASE INSERT ERROR:", r.status_code, r.text)
         if r.status_code not in (200, 201):
             raise HTTPException(status_code=500, detail=r.text)
-        if r.status_code not in (200, 201):
-            raise HTTPException(status_code=500, detail=r.text)
 
         # Log violations if any
         if not contract_passed:
