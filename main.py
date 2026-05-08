@@ -447,7 +447,7 @@ def send_envelope(body: EnvelopeCreate):
 
     with db() as client:
         r = client.post("/envelopes", json=record)
-                print("SUPABASE INSERT ERROR:", r.status_code, r.text)
+        print("SUPABASE INSERT ERROR:", r.status_code, r.text)
         if r.status_code not in (200, 201):
             raise HTTPException(status_code=500, detail=r.text)
         if r.status_code not in (200, 201):
