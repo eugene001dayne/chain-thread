@@ -6,6 +6,8 @@ When AI agents hand work to each other, there's no standard for what gets transf
 
 ChainThread fixes that.
 
+Learn more at threadsuite.netlify.app
+
 ---
 
 ## The problem
